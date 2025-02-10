@@ -287,16 +287,27 @@ def evaluate_classification_metrics(y_true, y_pred, positive_label):
     accuracy = (tp + tn) / (tp + tn + fp + fn)
 
     # Precision
-    precision = tp / (tp + fp)
+    if (tp + fp) > 0:
+        precision = tp / (tp + fp)  
+    else:
+        precision = 0
 
     # Recall (Sensitivity)
-    recall = tp / (tp + fn)
+    if (tp + fn) > 0:
+        recall = tp / (tp + fn) 
+    else:
+        recall = 0
 
-    # Specificity
-    specificity = tn / (tn + fp)
+    if (tn + fp) > 0:
+        specificity = tn / (tn + fp) 
+    else:
+        specificity = 0
 
     # F1 Score
-    f1 = 2 * (precision * recall) / (precision + recall)
+    if (precision + recall) > 0:
+        f1 = 2 * (precision * recall) / (precision + recall)
+    else:
+        f1 = 0
 
     return {
         "Confusion Matrix": [tn, fp, fn, tp],
@@ -332,22 +343,38 @@ def plot_calibration_curve(y_true, y_probs, positive_label, n_bins=10):
             - "true_proportions": Array of the fraction of positives in each bin
 
     """
-    positive_label_int = int(positive_label) 
-    y_true_mapped = np.array([1 if label in positive_label_int else 0 for label in y_true])
+    y_true_mapped = np.array([1 if label == positive_label else 0 for label in y_true])
 
-    bin_edges = np.linspace(0, 1, n_bins + 1)
-    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2 
-    true_proportions = np.zeros(n_bins)
-    
-    # Compute the fraction of positives in each bin
-    for i in range(n_bins):
-        intervalos = (y_probs >= bin_edges[i]) & (y_probs < bin_edges[i + 1])
-        if np.sum(intervalos) > 0:
-            true_proportions[i] = np.mean(y_true_mapped[intervalos])
-        else:
-            true_proportions[i] = np.nan  # Assign NaN if no samples in bin
+    # Initialize bins and counts
+    bin_counts = [0] * n_bins
+    true_counts = [0] * n_bins
+    bin_centers = [(i + 0.5) / n_bins for i in range(n_bins)]
 
-    
+    # Assign probabilities to bins
+    for i in range(len(y_true_mapped)):
+        true = y_true_mapped[i]
+        prob = y_probs[i]
+        bin_index = int(prob * n_bins)
+        if bin_index == n_bins:  # Handle the edge case where prob == 1
+            bin_index = n_bins - 1
+        bin_counts[bin_index] += 1
+        true_counts[bin_index] += true
+
+    # Calculate true proportions
+    true_proportions = [
+        true_counts[i] / bin_counts[i] if bin_counts[i] > 0 else 0
+        for i in range(n_bins)]
+
+    # Plot the calibration curve
+    plt.figure(figsize=(8, 6))
+    plt.plot(bin_centers, true_proportions, marker='o', linestyle='-', label='Calibration curve')
+    plt.plot([0, 1], [0, 1], linestyle='--', label='Perfectly calibrated')
+    plt.xlabel('Mean predicted probability')
+    plt.ylabel('Fraction of positives')
+    plt.title('Calibration Curve')
+    plt.legend()
+    plt.show()
+
     return {"bin_centers": bin_centers, "true_proportions": true_proportions}
 
 
@@ -378,7 +405,7 @@ def plot_probability_histograms(y_true, y_probs, positive_label, n_bins=10):
 
     """
     positive_label_int = int(positive_label) 
-    y_true_mapped = np.array([1 if label in positive_label_int else 0 for label in y_true])
+    y_true_mapped = np.array([1 if label == positive_label_int else 0 for label in y_true])
 
     # Plot histograms
     plt.figure(figsize=(8, 6))
@@ -420,39 +447,38 @@ def plot_roc_curve(y_true, y_probs, positive_label):
             - "tpr": Array of True Positive Rates for each threshold.
 
     """
-    positive_label_int = int(positive_label) 
-    y_true_mapped = np.array([1 if label in positive_label_int else 0 for label in y_true])
+    y_true_mapped = np.array([1 if label == positive_label else 0 for label in y_true])
+    y_probs = np.array(y_probs)
+    np.append(y_probs,0)
+    np.append(y_probs,1)
+    # Get unique thresholds (sorted in descending order)
+    thresholds = np.linspace(0, 1, 11)
 
-    # Sort probabilities and define thresholds
-    thresholds = np.sort(np.unique(y_probs))
-    thresholds = np.append(thresholds, 1.0) 
+    tpr = []
+    fpr = []
+
+    # Compute TPR and FPR for each threshold
+    for threshold in thresholds:
+        y_pred = (y_probs >= threshold).astype(int)  # Convert probabilities to binary predictions
+
+        tp = np.sum((y_pred == 1) & (y_true_mapped == 1))  # True Positives
+        fn = np.sum((y_pred == 0) & (y_true_mapped == 1))  # False Negatives
+        fp = np.sum((y_pred == 1) & (y_true_mapped == 0))  # False Positives
+        tn = np.sum((y_pred == 0) & (y_true_mapped == 0))  # True Negatives
+
+        tpr.append(tp / (tp + fn) if (tp + fn) > 0 else 0)  # TPR = TP / (TP + FN)
+        fpr.append(fp / (fp + tn) if (fp + tn) > 0 else 0)  # FPR = FP / (FP + TN)
+
+
+    # Plot ROC Curve
+    plt.figure(figsize=(7, 5))
+    plt.plot(fpr, tpr, marker="o", linestyle="-", label="ROC Curve", color="blue")  # FIXED
+    plt.plot([0, 1], [0, 1], "--", color="gray", label="Random Classifier (Baseline)")
     
-    tpr = []  
-    fpr = []  
-    
-    for umbral in thresholds:
-        y_pred = (y_probs >= umbral).astype(int)
-        
-        tp = np.sum((y_true_mapped == 1) & (y_pred == 1))
-        fp = np.sum((y_true_mapped == 0) & (y_pred == 1))
-        fn = np.sum((y_true_mapped == 1) & (y_pred == 0))
-        tn = np.sum((y_true_mapped == 0) & (y_pred == 0))
-        
-        tpr.append(tp / (tp + fn) if (tp + fn) > 0 else 0)
-        fpr.append(fp / (fp + tn) if (fp + tn) > 0 else 0)
-    
-    # Convert lists to numpy arrays
-    tpr = np.array(tpr)
-    fpr = np.array(fpr)
-    
-    # Plot ROC curve
-    plt.figure(figsize=(6, 6))
-    plt.plot(fpr, tpr, marker='o', linestyle='-', label='ROC Curve')
-    plt.plot([0, 1], [0, 1], linestyle="--", color='gray', label='Random Model')
-    plt.xlabel("False Positive Rate")
-    plt.ylabel("True Positive Rate")
-    plt.title("ROC Curve")
+    plt.xlabel("False Positive Rate (FPR)")
+    plt.ylabel("True Positive Rate (TPR)")
+    plt.title("Receiver Operating Characteristic (ROC) Curve")
     plt.legend()
-    plt.grid()
+    plt.grid(True)
     plt.show()
     return {"fpr": np.array(fpr), "tpr": np.array(tpr)}
